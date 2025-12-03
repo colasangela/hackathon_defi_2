@@ -29,7 +29,32 @@ temp['date'] = pd.to_datetime(temp['date'])
 debit['date'] = pd.to_datetime(debit['date'])
 
 
-df = pd.merge(temp, debit, on=['site_id', 'date'], how='outer', indicator=True)
+# --- Vérification structure ---
+print("\n=== Colonnes TEMP ===")
+print(temp.columns.tolist())
+print("Nb lignes temp :", len(temp))
+
+print("\nStations dans temp :")
+print(sorted(temp['site_id'].unique()))
+
+print("\n=== Colonnes DEBIT ===")
+print(debit.columns.tolist())
+print("Nb lignes debit :", len(debit))
+
+print("\nStations dans debit :")
+print(sorted(debit['site_id'].unique()))
+
+
+print("\n=== Intersection des site_id ===")
+print(set(temp['site_id']).intersection(set(debit['site_id'])))
+
+print("\n=== site_id présents uniquement dans TEMP ===")
+print(set(temp['site_id']) - set(debit['site_id']))
+
+print("\n=== site_id présents uniquement dans DEBIT ===")
+print(set(debit['site_id']) - set(temp['site_id']))
+
+df = pd.merge(temp, debit, on=['site_id', 'date'], how='left', indicator=True)
 
 
 # ----- 2) Vérification des valeurs manquantes -----
