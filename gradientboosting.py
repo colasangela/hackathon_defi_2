@@ -177,7 +177,7 @@ def add_features(df):
     # Interaction amont-local et modulation par Q (éviter div par 0) où Q est le débit
     # Ces instructions créent des features dérivées combinant température et débit pour enrichir le modèle
     # df['delta_air'] = df['T_air'] - df['T_air_local']
-    df['delta_air_over_Q'] = df['_air'T] / (df['Q'] + 1e-6)
+    df['delta_air_over_Q'] = df['T_air'] / (df['Q'] + 1e-6)
     df['inv_Q'] = 1.0 / (df['Q'] + 1e-6)
     
     return df
@@ -208,7 +208,7 @@ features = [
     'site_id',
     'T_air', 'T_air_lag1', 'T_air_rm3',
     'Q', 'inv_Q',
-    'delta_air', 'delta_air_over_Q',
+    'delta_air_over_Q',
     'T_fleuve_lag1', 'T_fleuve_lag2', 'T_fleuve_rm7',
     'sin_doy', 'cos_doy'
 ]
@@ -277,9 +277,14 @@ for train_idx, val_idx in tscv.split(unique_dates):
     dval = lgb.Dataset(val_rows[features], label=val_rows[target], reference=dtrain, categorical_feature=['site_id'])
     
     # Entraînement rapide par fold (early stopping)
-    bst = lgb.train(lgb_params, dtrain, valid_sets=[dtrain, dval], num_boost_round=2000,
-                    early_stopping_rounds=50, verbose_eval=False)
-    
+    bst = lgb.train(
+        lgb_params,
+        dtrain,
+        valid_sets=[dtrain, dval],
+        num_boost_round=2000,
+        callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)]
+    )
+
     # Prédiction sur val
     val_pred = bst.predict(val_rows[features])
     mae = mean_absolute_error(val_rows[target], val_pred)
