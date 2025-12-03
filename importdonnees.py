@@ -1,13 +1,20 @@
 import pandas as pd
 
 # --- Import des tables ---
-temp = pd.read_csv("temperatures_journalieres.csv")
+temp = pd.read_csv("temperatures_journalieres_5_stations.csv")
 debit = pd.read_csv("debit_2009_2010.csv")
+
+print("\nColonnes de temp :")
+print(temp.columns.tolist())
+
+print("\nColonnes de debit :")
+print(debit.columns.tolist())
+
 
 # --- Renommage des colonnes ---
 temp = temp.rename(columns={
     'libelle_station': 'site_id',
-    'date_mesure_temps': 'date',
+    'date_mesure_temp': 'date',
     'resultat': 'T_fleuve'
 })
 
@@ -44,3 +51,4 @@ print(df[df['_merge'] == 'left_only'].head(20))
 
 print("\n=== Lignes présentes uniquement dans debit (pas dans temp) ===")
 print(df[df['_merge'] == 'right_only'].head(20))
+
