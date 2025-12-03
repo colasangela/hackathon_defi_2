@@ -150,9 +150,10 @@ def add_features(df):
     g = df.groupby('site_id', group_keys=False)
     
     # Lags et rolling de la température de l'eau
-    df['T_fleuve_lag1'] = g['T_fleuve'].shift(1)
-    df['T_fleuve_lag2'] = g['T_fleuve'].shift(2)
+    df['T_fleuve_lag1'] = g['T_fleuve'].shift(1) # pour chaque jour, on obtient la température du fleuve du jour précédent.
+    df['T_fleuve_lag2'] = g['T_fleuve'].shift(2) # pour chaque jour, on obtient la température du fleuve 2 jours avant.
     df['T_fleuve_rm7']  = g['T_fleuve'].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
+    # et moyenne glissante sur 7 jours
     
     # Lags/rolling de T_air_local
     df['T_air_local_lag1'] = g['T_air_local'].shift(1)
@@ -162,7 +163,8 @@ def add_features(df):
     df['T_air_amont_lag1'] = g['T_air_amont'].shift(1)
     df['T_air_amont_rm3']  = g['T_air_amont'].rolling(window=3, min_periods=1).mean().reset_index(level=0, drop=True)
     
-    # Interaction amont-local et modulation par Q (éviter div par 0)
+    # Interaction amont-local et modulation par Q (éviter div par 0) où Q est le débit
+    # Ces instructions créent des features dérivées combinant température et débit pour enrichir le modèle
     df['delta_air'] = df['T_air_amont'] - df['T_air_local']
     df['delta_air_over_Q'] = df['delta_air'] / (df['Q'] + 1e-6)
     df['inv_Q'] = 1.0 / (df['Q'] + 1e-6)
@@ -245,6 +247,7 @@ lgb_params = {
 cv_results = []
 residuals_list = []  # on collecte résidus par fold pour estimer sigma
 
+# entrainement et test sur les différents folds
 fold_id = 0
 for train_idx, val_idx in tscv.split(unique_dates):
     fold_id += 1
@@ -253,15 +256,15 @@ for train_idx, val_idx in tscv.split(unique_dates):
     
     # sélection des lignes
     train_rows = hist_model[hist_model['date'].isin(train_dates)].copy()
-    val_rows   = hist_model[hist_model['date'].isin(val_dates)].copy()
+    val_rows = hist_model[hist_model['date'].isin(val_dates)].copy()
     
     # sécurité : si un fold a peu de données pour certains sites, on l'accepte mais l'utilisateur doit surveiller
     print(f"Fold {fold_id} — train_dates {train_dates.min()} -> {train_dates.max()}, val_dates {val_dates.min()} -> {val_dates.max()}")
     print("  lignes train:", len(train_rows), "lignes val:", len(val_rows))
     
-    # Préparer datasets LightGBM
+    # Préparer datasets en les mettant au format requis pour LightGBM
     dtrain = lgb.Dataset(train_rows[features], label=train_rows[target], categorical_feature=['site_id'])
-    dval   = lgb.Dataset(val_rows[features], label=val_rows[target], reference=dtrain, categorical_feature=['site_id'])
+    dval = lgb.Dataset(val_rows[features], label=val_rows[target], reference=dtrain, categorical_feature=['site_id'])
     
     # Entraînement rapide par fold (early stopping)
     bst = lgb.train(lgb_params, dtrain, valid_sets=[dtrain, dval], num_boost_round=2000,
@@ -280,7 +283,7 @@ for train_idx, val_idx in tscv.split(unique_dates):
     temp['resid'] = temp['true'] - temp['pred']
     residuals_list.append(temp)
 
-# Agréger diagnostics CV
+# Agréger diagnostics CV (c'est à dire les métriques d'évaluation du modèle sur cette cross validation)
 cv_df = pd.DataFrame(cv_results)
 print("\nRésultats CV :")
 print(cv_df)
@@ -338,6 +341,9 @@ futur_df['pred_T'] = bst_full.predict(futur_df[features])
 # ---------------------------
 # 8) Fonctions : espérance + MC
 # ---------------------------
+
+# A REPRENDRE A PARTIR D'ICI : ce qu'on veut, c'est en 2030 et en 2050. Pas une moyenne pour toutes les années futures !
+
 def expected_days_for_threshold(df_future, site, threshold):
     """
     Calcule l'espérance du nombre de jours par année où T_eau > threshold pour un site.
