@@ -342,134 +342,139 @@ futur_df['pred_T'] = bst_full.predict(futur_df[features])
 # 8) Fonctions : espérance + MC
 # ---------------------------
 
-# A REPRENDRE A PARTIR D'ICI : ce qu'on veut, c'est en 2030 et en 2050. Pas une moyenne pour toutes les années futures !
+# Fonctions adaptées pour intervalle d'années
+# ---------------------------
 
-def expected_days_for_threshold(df_future, site, threshold):
+
+def expected_days_interval(df_future, site, threshold, start_year, end_year):
     """
-    Calcule l'espérance du nombre de jours par année où T_eau > threshold pour un site.
-    On suppose df_future contient colonnes : ['site_id','date','year','pred_T','sigma'].
-    Retour : DataFrame (year, expected_days).
+    Calcule l'espérance du nombre de jours par an > threshold sur un intervalle
+    donné (start_year à end_year), renvoie un float : nombre moyen de jours/an.
     """
-    sub = df_future[df_future['site_id'] == site].copy()
+    sub = df_future[(df_future['site_id']==site) & 
+                    (df_future['year']>=start_year) & 
+                    (df_future['year']<=end_year)].copy()
     if sub.empty:
-        return pd.DataFrame(columns=['year','expected_days'])
+        return np.nan
+    
     eps = 1e-8
     z = (threshold - sub['pred_T']) / (sub['sigma'] + eps)
     sub['p_exceed'] = 1.0 - norm.cdf(z)
-    res = sub.groupby('year')['p_exceed'].sum().reset_index().rename(columns={'p_exceed':'expected_days'})
-    return res
+    
+    # somme journalière par année
+    yearly_sum = sub.groupby('year')['p_exceed'].sum()
+    
+    # moyenne sur toutes les années de l'intervalle
+    mean_days_per_year = yearly_sum.mean()
+    return mean_days_per_year
 
-def mc_counts(df_future, site, threshold, n_mc=500, random_state=42, batch_size=None):
+def mc_counts_interval(df_future, site, threshold, start_year, end_year, n_mc=500, random_state=42):
     """
-    Monte-Carlo : simule n_mc trajectoires (normales) T ~ N(pred_T, sigma^2).
-    Retour : dict {year: array of counts length n_mc}
-    Pour mémoire : si n_mc * n_days est grand, on peut simuler par batch.
+    Monte-Carlo : simule n_mc trajectoires T ~ N(pred_T, sigma^2) sur un intervalle
+    d'années, retourne la distribution du nombre moyen de jours/an > threshold.
     """
-    sub = df_future[df_future['site_id'] == site].copy()
+    sub = df_future[(df_future['site_id']==site) & 
+                    (df_future['year']>=start_year) & 
+                    (df_future['year']<=end_year)].copy()
     if sub.empty:
-        return {}
+        return np.array([])
+    
     rng = np.random.default_rng(random_state)
-    mus = sub['pred_T'].values  # (n_days,)
+    mus = sub['pred_T'].values
     sigs = sub['sigma'].values
     years = sub['year'].values
     unique_years = np.unique(years)
-    n_days = len(mus)
     
-    # Gestion mémoire : si batch_size fourni -> faire par lots de simulations
-    if batch_size is None:
-        # simulation complète (n_days x n_mc)
-        sims = rng.normal(loc=mus.reshape(-1,1), scale=sigs.reshape(-1,1), size=(n_days, n_mc))
-        exceed = sims > threshold  # bool
-        results = {}
+    # simulations
+    sims = rng.normal(loc=mus.reshape(-1,1), scale=sigs.reshape(-1,1), size=(len(mus), n_mc))
+    exceed = sims > threshold  # bool
+    
+    # somme par année puis moyenne sur l'intervalle
+    mean_days = []
+    for i in range(n_mc):
+        counts_per_year = []
         for y in unique_years:
-            mask = (years == y)
-            counts = exceed[mask, :].sum(axis=0)
-            results[int(y)] = counts
-        return results
-    else:
-        # simulation par batch de n_batch sims
-        results_acc = {int(y): np.zeros(batch_size, dtype=int) for y in unique_years}  # initialisation dynamique
-        results_full = {int(y): [] for y in unique_years}
-        n_done = 0
-        while n_done < n_mc:
-            this_batch = min(batch_size, n_mc - n_done)
-            sims = rng.normal(loc=mus.reshape(-1,1), scale=sigs.reshape(-1,1), size=(n_days, this_batch))
-            exceed = sims > threshold
-            for y in unique_years:
-                mask = (years == y)
-                counts = exceed[mask, :].sum(axis=0)
-                results_full[int(y)].append(counts)
-            n_done += this_batch
-        # concat per year
-        results = {y: np.hstack(results_full[y]) for y in unique_years}
-        return results
+            mask = (years==y)
+            counts_per_year.append(exceed[mask, i].sum())
+        mean_days.append(np.mean(counts_per_year))
+    return np.array(mean_days)  # distribution Monte-Carlo
+
 
 # ---------------------------
-# 9) Application : calculer espérance + MC pour tous les sites & seuils
+# Exemple d'application : 2031–2050 (pour 2041)
 # ---------------------------
 # Exemple de dictionnaire de seuils par site (adapte-le)
 sites = sorted(futur_df['site_id'].unique())
-default_threshold = 28.0
-seuils = {s: default_threshold for s in sites}
+threshold = 25.0
+# seuils = {s: threshold for s in sites}
 
-# Calcul des espérances
-expected_list = []
+start_year = 2031
+end_year = 2050
+
+results = []
+mc_results = []
+
 for s in sites:
-    res = expected_days_for_threshold(futur_df, s, seuils[s])
-    if res.empty:
-        continue
-    res['site_id'] = s
-    res['threshold'] = seuils[s]
-    expected_list.append(res)
-expected_df = pd.concat(expected_list, axis=0).reset_index(drop=True)
-print("Extrait espérances :")
-print(expected_df.head())
+    # espérance
+    mean_days = expected_days_interval(futur_df, s, seuils[s], start_year, end_year)
+    results.append({'site_id': s, 'mean_days_per_year': mean_days, 
+                    'threshold': seuils[s]})
+    
+    # Monte-Carlo
+    mc_arr = mc_counts_interval(futur_df, s, seuils[s], start_year, end_year, n_mc=500)
+    if len(mc_arr) > 0:
+        mc_results.append({'site_id': s,
+                           'median': np.median(mc_arr),
+                           'p2.5': np.percentile(mc_arr, 2.5),
+                           'p97.5': np.percentile(mc_arr, 97.5),
+                           'threshold': seuils[s]})
 
-# Exemple MC pour un site
-if len(sites) > 0:
-    example_site = sites[0]
-    mc_res = mc_counts(futur_df, example_site, seuils[example_site], n_mc=500)
-    # résumé MC (median + 95% CI)
-    mc_summary = []
-    for year, arr in mc_res.items():
-        mc_summary.append({'site_id': example_site,
-                           'year': year,
-                           'median': np.median(arr),
-                           'p2.5': np.percentile(arr, 2.5),
-                           'p97.5': np.percentile(arr, 97.5)})
-    mc_summary = pd.DataFrame(mc_summary).sort_values(['site_id','year'])
-    print(f"\nRésumé MC pour site {example_site} :")
-    print(mc_summary.head())
-else:
-    mc_summary = pd.DataFrame()
+expected_interval_df = pd.DataFrame(results)
+mc_interval_df = pd.DataFrame(mc_results)
+
+print(f"Espérance nombre de jours/an supérieurs à {threshold} sur intervalle 2030-2050 pour chaque station :")
+print(expected_interval_df)
+print("\nMC (distribution) sur intervalle 2030-2050 :")
+print(mc_interval_df)
+
 
 # ---------------------------
 # 10) Visualisation (exemple)
 # ---------------------------
-def plot_site_expected_and_ci(site, expected_df, mc_summary):
-    exp = expected_df[expected_df['site_id'] == site].set_index('year').sort_index()
-    mc = mc_summary[mc_summary['site_id'] == site].set_index('year').sort_index()
+
+def plot_sites_mean_days(expected_df, mc_df=None):
+    sites = expected_df['site_id'].values
+    means = expected_df['mean_days_per_year'].values
     plt.figure(figsize=(10,5))
-    if not mc.empty:
-        plt.fill_between(mc.index, mc['p2.5'], mc['p97.5'], alpha=0.25, label='IC 95% (MC)')
-        plt.plot(mc.index, mc['median'], marker='o', linestyle='--', label='mediane (MC)')
-    if not exp.empty:
-        plt.plot(exp.index, exp['expected_days'], marker='o', label='espérance (somme p_j)')
-    plt.title(f"Jours dépassant seuil - site {site}")
-    plt.xlabel("Année")
-    plt.ylabel("Nombre de jours")
+    if mc_df is not None and not mc_df.empty:
+        lower, upper = [], []
+        for s in sites:
+            row = mc_df[mc_df['site_id']==s]
+            if not row.empty:
+                lower.append(row['p2.5'].values[0])
+                upper.append(row['p97.5'].values[0])
+            else:
+                lower.append(np.nan)
+                upper.append(np.nan)
+        plt.errorbar(sites, means, yerr=[means - np.array(lower), np.array(upper) - means],
+                     fmt='o', capsize=5, label='espérance ± IC 95% (MC)')
+    else:
+        plt.bar(sites, means, alpha=0.7, label='espérance')
+    plt.ylabel("Nombre moyen de jours/an > seuil")
+    plt.xlabel("Site")
+    plt.title(f"Nombre moyen de jours/an > seuil sur intervalle {start_year}-{end_year}")
+    plt.xticks(rotation=45)
     plt.legend()
+    plt.tight_layout()
     plt.show()
 
-# Tracer pour site d'exemple si existant
-if len(sites) > 0:
-    plot_site_expected_and_ci(example_site, expected_df, mc_summary)
+
+plot_sites_mean_days(expected_interval_df, mc_interval_df)
 
 # ---------------------------
-# 11) Export résultats
+# 8) Export résultats
 # ---------------------------
-expected_df.to_csv("expected_days_per_year_by_site.csv", index=False)
-if not mc_summary.empty:
-    mc_summary.to_csv(f"mc_summary_{example_site}.csv", index=False)
+expected_interval_df.to_csv("expected_days_per_year_by_site.csv", index=False)
+mc_interval_df.to_csv("mc_summary_interval_by_site.csv", index=False)
 
-print("Pipeline terminé — fichiers sauvegardés si souhaité.")
+print("Pipeline complet terminé — CSV et graphique générés.")
